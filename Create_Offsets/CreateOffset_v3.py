@@ -1,7 +1,7 @@
 '''
 Author: William J. Reid
 Description: This Fusion 360 script creates a single offset sketch from a selected sketch profile. 
-The sketch profile does not need to be a closed sketch.
+The sketch profile does not need to be a closed sketch. It supports creating a offsets for lines, arcs, circles and splines.
 '''
 
 import adsk.core, adsk.fusion, adsk.cam, traceback
