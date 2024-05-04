@@ -1,34 +1,66 @@
 '''
 Author: William J. Reid
-Description: Recreates a hard-coded sketch profile and allows user to center it on given location in the sketch.
+Description: Recreates a hard-coded circular-type sketch profile, centers it on the extruded-vut circle profile selected, and scales it to the extrusion diameter.
 The hard-coded skech profile is extracted from the output of CreateSketchFromEdge_v4.py script. 
 '''
 
 import adsk.core, adsk.fusion, adsk.cam, traceback, math
 
-# Define a function to add sketch entities based on provided parameters
-def addSketchEntities(sketch, entities, offsetX, offsetY):
+def addScaledSketchEntities(sketch, entities, offsetX, offsetY, scaleFactor):
     lines = sketch.sketchCurves.sketchLines
     arcs = sketch.sketchCurves.sketchArcs
     circles = sketch.sketchCurves.sketchCircles
+
     for entity in entities:
-        entity_type, params = entity  # Unpack entity type and parameters
+        entity_type, params = entity
         if entity_type == 'line':
-            # Expect params to be a list containing a single tuple with start and end points
-            [(p1, p2)] = params  # Unpack the single tuple from the list
-            lines.addByTwoPoints(adsk.core.Point3D.create(p1[0] + offsetX, p1[1] + offsetY, p1[2]),
-                                 adsk.core.Point3D.create(p2[0] + offsetX, p2[1] + offsetY, p2[2]))
+            [(p1, p2)] = params
+            lines.addByTwoPoints(
+                adsk.core.Point3D.create((p1[0] * scaleFactor) + offsetX, (p1[1] * scaleFactor) + offsetY, p1[2]),
+                adsk.core.Point3D.create((p2[0] * scaleFactor) + offsetX, (p2[1] * scaleFactor) + offsetY, p2[2])
+            )
         elif entity_type == 'arc':
-            # Expect params to be a list containing a single tuple with center, start, and sweep
-            [(center, start, sweep)] = params  # Unpack the single tuple from the list
-            arcs.addByCenterStartSweep(adsk.core.Point3D.create(center[0] + offsetX, center[1] + offsetY, center[2]),
-                                       adsk.core.Point3D.create(start[0] + offsetX, start[1] + offsetY, start[2]),
-                                       sweep)
+            [(center, start, sweep)] = params
+            scaled_center = adsk.core.Point3D.create(center[0] * scaleFactor + offsetX, center[1] * scaleFactor + offsetY, center[2])
+            radius = math.dist(center, start) * scaleFactor
+            angle = math.atan2(start[1] - center[1], start[0] - center[0])
+            scaled_start = adsk.core.Point3D.create(
+                scaled_center.x + math.cos(angle) * radius,
+                scaled_center.y + math.sin(angle) * radius,
+                start[2]
+            )
+            arcs.addByCenterStartSweep(scaled_center, scaled_start, sweep)
         elif entity_type == 'circle':
             [(center, radius)] = params
-            centerPoint = adsk.core.Point3D.create(center[0] + offsetX, center[1] + offsetY, center[2])
-            circles.addByCenterRadius(centerPoint, radius)
-            
+            circles.addByCenterRadius(
+                adsk.core.Point3D.create((center[0] * scaleFactor) + offsetX, (center[1] * scaleFactor) + offsetY, center[2]),
+                radius * scaleFactor
+            )
+
+def scaleArc(arc, scaleFactor, centerPoint):
+    """ Scales an arc's radius and repositions its center, start, and end points. """
+    # Calculate new center, start, and end points
+    newCenter = arc.center.copy()
+    newCenter.x = (newCenter.x - centerPoint.x) * scaleFactor + centerPoint.x
+    newCenter.y = (newCenter.y - centerPoint.y) * scaleFactor + centerPoint.y
+    newStart = arc.startPoint.copy()
+    newStart.x = (newStart.x - centerPoint.x) * scaleFactor + centerPoint.x
+    newStart.y = (newStart.y - centerPoint.y) * scaleFactor + centerPoint.y
+    newEnd = arc.endPoint.copy()
+    newEnd.x = (newEnd.x - centerPoint.x) * scaleFactor + centerPoint.x
+    newEnd.y = (newEnd.y - centerPoint.y) * scaleFactor + centerPoint.y
+
+    # Move the arc's center, start, and end sketch points
+    arc.centerSketchPoint.move(adsk.core.Vector3D.create(newCenter.x - arc.center.x, newCenter.y - arc.center.y, 0))
+    arc.startSketchPoint.move(adsk.core.Vector3D.create(newStart.x - arc.startPoint.x, newStart.y - arc.startPoint.y, 0))
+    arc.endSketchPoint.move(adsk.core.Vector3D.create(newEnd.x - arc.endPoint.x, newEnd.y - arc.endPoint.y, 0))
+
+    # Scale the radius
+    arc.radius *= scaleFactor
+
+def calculateScaleFactor(selectedEdge, standardDiameter):
+    selectedDiameter = selectedEdge.geometry.radius
+    return selectedDiameter / standardDiameter     
             
 
 #TODO: Add ability to scale the profile entities
@@ -221,6 +253,27 @@ def calculateProfileCentroid(loop):
     centroid = adsk.core.Point3D.create(centroid_x / total_length, centroid_y / total_length, centroid_z / total_length)
     return centroid
 
+def scaleEntity(entity, scaleFactor, center):
+    """Scales a given sketch entity around a center point by the scaleFactor."""
+    if isinstance(entity, adsk.fusion.SketchLine):
+        # Scale line end points
+        start = entity.startSketchPoint.geometry.copy()
+        end = entity.endSketchPoint.geometry.copy()
+        entity.startSketchPoint.move(adsk.core.Vector3D.create((start.x - center.x) * scaleFactor + center.x - start.x,
+                                                              (start.y - center.y) * scaleFactor + center.y - start.y,
+                                                              (start.z - center.z) * scaleFactor + center.z - start.z))
+        entity.endSketchPoint.move(adsk.core.Vector3D.create((end.x - center.x) * scaleFactor + center.x - end.x,
+                                                            (end.y - center.y) * scaleFactor + center.y - end.y,
+                                                            (end.z - center.z) * scaleFactor + center.z - end.z))
+    elif isinstance(entity, adsk.fusion.SketchCircle):
+        # Scale circle radius and center
+        centerPoint = entity.centerSketchPoint.geometry.copy()
+        entity.centerSketchPoint.move(adsk.core.Vector3D.create((centerPoint.x - center.x) * scaleFactor + center.x - centerPoint.x,
+                                                                (centerPoint.y - center.y) * scaleFactor + center.y - centerPoint.y,
+                                                                (centerPoint.z - center.z) * scaleFactor + center.z - centerPoint.z))
+        entity.radius = entity.radius * scaleFactor
+    elif type(entity) == adsk.fusion.SketchArc:
+            scaleArc(entity, scaleFactor, centerPoint)
 
 def run(context):
     ui = None
@@ -266,6 +319,11 @@ def run(context):
             ui.messageBox('No edge selected.')
             return
         selectedEdge = adsk.fusion.BRepEdge.cast(edgeSelection.entity)
+        
+        standardDiameter = 1.0  # This should match your reference profile edge diameter
+        scaleFactor = calculateScaleFactor(selectedEdge, standardDiameter)
+
+        
 
         # Identify the loop (profile) containing the selected edge
         face = selectedEdge.faces.item(0)  # Assuming the first face is relevant
@@ -304,10 +362,15 @@ def run(context):
         offsetY = profileCentroid.y
 
         # Add entities for the selected profile
-        addSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY)
-
+        # sketch = addSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY)
+        addScaledSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY, scaleFactor)
+        
         # Notify the user
         ui.messageBox('The sketch centered on the selected profile has been created successfully.')
+
+        # Notify the user
+        ui.messageBox('The sketch has been scaled successfully.')
+
 
     except Exception as e:
         if ui:
