@@ -1,3 +1,10 @@
+'''
+Author: William J. Reid
+Description: Extracts profile of sketch centered on origin of plane to be added to a profile category in the following script: RecreateSketchFromGeometry_v5.py. 
+The output is in a python list, can be copy-pasted directly. Scale the extruded profile such that the center piece where the male piece would be placed has a radius
+of 10mm = 1cm in order for the scaling to work properly in RecreateSketchFromGeometry_v#.py
+'''
+
 import adsk.core, adsk.fusion, adsk.cam, traceback, math
 
 def get_sketch_normal(sketch):
@@ -9,13 +16,11 @@ def get_sketch_normal(sketch):
         if sketch.referencePlane and sketch.referencePlane.geometry:
             return sketch.referencePlane.geometry.normal
         else:
-            # Log an error or warning if the reference plane is not available
             print("Warning: Sketch does not have a valid reference plane. Using default Z normal.")
-            return adsk.core.Vector3D.create(0, 0, 1)  # Default to Z normal if unspecified
+            return adsk.core.Vector3D.create(0, 0, 1) # Default to Z normal if unspecified
     except Exception as e:
         print(f"Error accessing sketch normal: {str(e)}")
-        return adsk.core.Vector3D.create(0, 0, 1)  # Fallback to default normal on any error
-
+        return adsk.core.Vector3D.create(0, 0, 1) # Fallback to default normal on any error
 
 def get_arc_parameters(arc_entity, sketch_normal):
     """
@@ -60,7 +65,8 @@ def get_spline_parameters(spline_entity):
     points = [point.geometry.asArray() for point in spline_entity.fitPoints]
     return points
 
-def run(context):
+
+def run(context=None):
     ui = None
     try:
         app = adsk.core.Application.get()
@@ -68,20 +74,31 @@ def run(context):
         design = app.activeProduct
         root_comp = design.rootComponent
 
-        selected_edge_obj = ui.selectEntity('Select an edge of the extruded geometry', 'Edges')
+        selected_edge_obj = ui.selectEntity('Select an edge that touches both a planar and a non-planar face', 'Edges')
         if not selected_edge_obj:
             ui.messageBox('No edge selected.')
             return
 
         selected_edge = adsk.fusion.BRepEdge.cast(selected_edge_obj.entity)
-        face = selected_edge.faces.item(0)
+        
+        # Check both connected faces to find a planar face
+        planar_face = None
+        for face in selected_edge.faces:
+            if face.geometry.surfaceType == adsk.core.SurfaceTypes.PlaneSurfaceType:
+                planar_face = face
+                break
+
+        if not planar_face:
+            ui.messageBox('No planar face associated with the selected edge. Please select a different edge.')
+            return
+
         sketches = root_comp.sketches
-        sketch = sketches.add(face)
+        sketch = sketches.add(planar_face)
         sketch_normal = get_sketch_normal(sketch)
 
         profile_entities = []
 
-        for edge in selected_edge.faces.item(0).loops.item(0).edges:
+        for edge in planar_face.edges:
             projected_entity = sketch.project(edge)
             for entity in projected_entity:
                 if isinstance(entity, adsk.fusion.SketchLine):
@@ -102,9 +119,10 @@ def run(context):
         entity_strings = ["    ('{}', {}),".format(e[0], e[1]) for e in profile_entities]
         display_text = "profile_entities = [\n" + "\n".join(entity_strings) + "\n]"
         ui.messageBox(display_text)
+        print(display_text)
 
     except Exception as e:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-run()
+run(None)
