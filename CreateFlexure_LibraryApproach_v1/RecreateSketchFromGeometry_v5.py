@@ -1,6 +1,6 @@
 '''
 Author: William J. Reid
-Description: Recreates a hard-coded sketch profile, automatically centers it on the selected extruded-cut circle selected, and automatically scales it to fit the extruded cut.
+Description: Recreates a hard-coded sketch profile and allows user to center it on given location in the sketch.
 The hard-coded skech profile is extracted from the output of CreateSketchFromEdge_v4.py script. 
 '''
 
@@ -62,7 +62,10 @@ def calculateScaleFactor(selectedEdge, standardDiameter):
     selectedDiameter = selectedEdge.geometry.radius
     return selectedDiameter / standardDiameter     
             
-# Profiles defined as lists of entities with parameters. NOTE: These are extracted from the output of ExtractSketchProfilev3.
+
+#TODO: Add ability to scale the profile entities
+
+# Profiles defined as lists of entities with parameters. NOTE: These are extracted from the output of CreateSketchFromEdge_v4.
 # Circular Flexure 1:
 profile_1_entities = [
     ('line', [((1.2494080302136261, -0.2530324324719002, 0.0), (0.9674577965561877, -0.2530324324719002, 0.0))]),
@@ -73,6 +76,7 @@ profile_1_entities = [
     ('arc', [((1.1102230246251565e-16, 0.0, 0.0), (1.3386514609431721, -0.1746776062198933, 0.0), 2.882189252852549)]),
     ('arc', [((1.2494080302136261, -0.1630324324718983, 0.0), (1.2494080302136261, -0.2530324324719002, 0.0), 1.4410417167180833)])
 ]
+
 profile_2_entities = [
     ('arc', [((0.24282679737437718, -1.1751745174555575, 0.0), (0.4118152602072076, -1.0682030285933521, 0.0), 1.210220058493101)]),
     ('arc', [((0.0, 3.552713678800501e-15, 0.0), (-0.20235566447863854, -0.9793120978796335, 0.0), 0.4075255066923056)]),
@@ -166,7 +170,7 @@ profile_3_entities = [
 ]
 
 #TODO: Add additional profile entities here:
-# profile_4_entities = []
+# profile_2_entities = []
 
 
 # The goal is to have a library of predefined flexture profiles that can be centered and scaled to fit on an extruded-cut profile. 
@@ -261,7 +265,7 @@ def scaleEntity(entity, scaleFactor, center):
 def run(context):
     ui = None
     try:
-        app = adsk.core.Application.get()
+        # app = adsk.core.Application.get()
         ui = app.userInterface
         design = app.activeProduct
         root_comp = design.rootComponent
@@ -271,84 +275,95 @@ def run(context):
         categoryResult = ui.inputBox('Enter profile category [Circular, Triangular, Square]:', 'Select Category', 'Circular')[0]
                     
         # Check if the user canceled the input operation
-        if categoryResult is None:
-            ui.messageBox('Operation canceled by the user.')
-            return
+        # Check if the user canceled the input operation
+        while categoryResult is not None:
+            
         
-        selectedCategory = str(categoryResult).strip()  # Ensure it's a string and remove any whitespace
+            selectedCategory = str(categoryResult).strip()  # Ensure it's a string and remove any whitespace
 
-        if selectedCategory not in profiles:
-            ui.messageBox(f'Invalid category selected: {selectedCategory}')
-            return
-        
-        # Similar handling for profile selection within the category
-        profileNames = ', '.join(profiles[selectedCategory].keys())
-        profileResult = ui.inputBox('Enter profile name:', 'Select Profile', list(profiles[selectedCategory].keys())[0])[0]
-
-        if profileResult is None:
-            ui.messageBox('Operation canceled by the user.')
-            return
-        
-        selectedProfile = str(profileResult).strip()
-
-        if selectedProfile not in profiles[selectedCategory]:
-            ui.messageBox(f'Invalid profile selected: {selectedProfile}')
-            return
-
-         # Prompt the user to select an edge of the profile to center the sketch
-        edgeSelection = ui.selectEntity('Select an edge of the profile to center the sketch', 'Edges')
-        if not edgeSelection:
-            ui.messageBox('No edge selected.')
-            return
-        selectedEdge = adsk.fusion.BRepEdge.cast(edgeSelection.entity)
-        
-        standardDiameter = 1.0  # Should match reference profile edge diameter (all sketches drawn should have an inner diameter of 10mm = 1cm for the placement of the cylindrical piece). This is in reference to the script ExtractSketchProfilev3.py which is used to extract such sketches.
-        scaleFactor = calculateScaleFactor(selectedEdge, standardDiameter)
-
-        # Identify the loop (profile) containing the selected edge
-        face = selectedEdge.faces.item(0)  # Assuming the first face is relevant
-        loop = None
-        for l in face.loops:
-            if selectedEdge in l.edges:
-                loop = l
+            if selectedCategory not in profiles:
+                ui.messageBox(f'Invalid category selected: {selectedCategory}')
+                return
+            elif categoryResult is None:
                 break
-        
-        if not loop:
-            ui.messageBox('Failed to identify the loop containing the selected edge.')
-            return
+            
+            # Similar handling for profile selection within the category
+            profileNames = ', '.join(profiles[selectedCategory].keys())
+            profileResult = ui.inputBox('Enter profile name:', 'Select Profile', list(profiles[selectedCategory].keys())[0])[0]
 
-        # Calculate the centroid of the selected profile
-        profileCentroid = calculateProfileCentroid(loop)
-        if not profileCentroid:
-            ui.messageBox('Failed to calculate the profile centroid.')
-            return
+            if profileResult is None:
+                ui.messageBox('Operation canceled by the user.')
+                return
+            
+            selectedProfile = str(profileResult).strip()
 
-        # Prompt the user to select a planar face or construction plane for the new sketch
-        planarEntity = ui.selectEntity('Select a planar face or construction plane for the new sketch', 'PlanarFaces,ConstructionPlanes')
-        if not planarEntity:
-            ui.messageBox('No planar entity selected.')
-            return
+            if selectedProfile not in profiles[selectedCategory]:
+                ui.messageBox(f'Invalid profile selected: {selectedProfile}')
+                return
+            
 
-        selectedEntity = adsk.fusion.ConstructionPlane.cast(planarEntity.entity) or adsk.fusion.BRepFace.cast(planarEntity.entity)
-        if not selectedEntity:
-            ui.messageBox('Invalid selection.')
-            return
+            
+            # Prompt the user to select an edge of the profile to center the sketch
+            edgeSelection = ui.selectEntity('Select an edge of the profile to center the sketch', 'Edges')
+            if not edgeSelection:
+                ui.messageBox('No edge selected.')
+                return
+            selectedEdge = adsk.fusion.BRepEdge.cast(edgeSelection.entity)
+            
+            standardDiameter = 1.0  # This should match your reference profile edge diameter
+            scaleFactor = calculateScaleFactor(selectedEdge, standardDiameter)
 
-        # Create a new sketch on the selected plane
-        sketch = root_comp.sketches.add(selectedEntity)
+            
 
-        # Offset XY-Plane
-        offsetX = profileCentroid.x
-        offsetY = profileCentroid.y
+            # Identify the loop (profile) containing the selected edge
+            face = selectedEdge.faces.item(0)  # Assuming the first face is relevant
+            loop = None
+            for l in face.loops:
+                if selectedEdge in l.edges:
+                    loop = l
+                    break
+            
+            if not loop:
+                ui.messageBox('Failed to identify the loop containing the selected edge.')
+                return
 
-        # Add entities for the selected profile
-        addScaledSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY, scaleFactor)
-        
-        # Notify the user
-        ui.messageBox('The sketch has been scaled and centered successfully onto the selected profile.')
+            # Calculate the centroid of the selected profile
+            profileCentroid = calculateProfileCentroid(loop)
+            if not profileCentroid:
+                ui.messageBox('Failed to calculate the profile centroid.')
+                return
+
+            # Prompt the user to select a planar face or construction plane for the new sketch
+            planarEntity = ui.selectEntity('Select a planar face or construction plane for the new sketch', 'PlanarFaces,ConstructionPlanes')
+            if not planarEntity:
+                ui.messageBox('No planar entity selected.')
+                return
+
+            selectedEntity = adsk.fusion.ConstructionPlane.cast(planarEntity.entity) or adsk.fusion.BRepFace.cast(planarEntity.entity)
+            if not selectedEntity:
+                ui.messageBox('Invalid selection.')
+                return
+
+            # Create a new sketch on the selected plane
+            sketch = root_comp.sketches.add(selectedEntity)
+
+            #TODO: Fix Centroid calculation and placement for Profile 2. Works correctly for Profile 1.
+            offsetX = profileCentroid.x
+            offsetY = profileCentroid.y
+
+            # Add entities for the selected profile
+            # sketch = addSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY)
+            addScaledSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY, scaleFactor)
+            
+            # Notify the user
+            ui.messageBox('The sketch has been has been scaled and centered successfully on the selected profile.')
+            
+        return ui.messageBox('Operation canceled by the user.')
+            
 
     except Exception as e:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-run()
+app = adsk.core.Application.get()
+run(adsk.fusion.Design.cast(app.activeProduct))
