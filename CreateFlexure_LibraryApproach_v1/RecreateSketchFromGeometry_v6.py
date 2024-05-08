@@ -1,7 +1,7 @@
 '''
 Author: William J. Reid
 Description: Recreates a hard-coded sketch profile, scales it to match the user-selected extruded-cut circle diameter, and centers 
-the sketch onto the extruded-cut circular profile selecteed. The hard-coded skech profile is extracted from the output of ExtractSketchFromEdgev3.py script. 
+the sketch onto the extruded-cut circular profile selecteed. The hard-coded skech profile is extracted from the output of ExtractSketchProfilev3.py script. 
 '''
 
 import adsk.core, adsk.fusion, adsk.cam, traceback, math
@@ -472,103 +472,210 @@ def scaleEntity(entity, scaleFactor, center):
     elif type(entity) == adsk.fusion.SketchArc:
             scaleArc(entity, scaleFactor, centerPoint)
 
-def run(context):
-    ui = None
-    try:
-        # app = adsk.core.Application.get()
-        ui = app.userInterface
-        design = app.activeProduct
-        root_comp = design.rootComponent
+# Handlers to store event references and prevent garbage collection
+global handlers 
+handlers = []
 
-        # User interface logic for selecting a category
-        categories = ', '.join(profiles.keys())
-        categoryResult = ui.inputBox('Enter profile category [Circular, Triangular, Square]:', 'Select Category', 'Circular')[0]
-                    
-        # Check if the user canceled the input operation
-        while categoryResult is not None:
-            
+class ProfileCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
+    def __init__(self):
+        super().__init__()
+
+    def notify(self, args):
+        """
+        Initializes the command inputs such as dropdown menus and selection inputs,
+        and attaches the appropriate event handlers.
         
-            selectedCategory = str(categoryResult).strip()  # Ensure it's a string and remove any whitespace
+        Parameters:
+            args (adsk.core.CommandEventArgs): Arguments containing details about the command creation event.
+        """
+        try:
+            cmd = adsk.core.Command.cast(args.command)
+            inputs = cmd.commandInputs
 
-            if selectedCategory not in profiles:
-                ui.messageBox(f'Invalid category selected: {selectedCategory}')
-                return
-            elif categoryResult is None:
-                break
+            # Initialize profile input to None initially
+            prof_input = None
             
-            # Similar handling for profile selection within the category
-            profileNames = ', '.join(profiles[selectedCategory].keys())
-            profileResult = ui.inputBox('Enter profile name:', 'Select Profile', list(profiles[selectedCategory].keys())[0])[0]
+            # Add a dropdown for selecting the profile category
+            if not inputs.itemById('category'):
+                cat_input = inputs.addDropDownCommandInput('category', 'Profile Category', adsk.core.DropDownStyles.TextListDropDownStyle)
+                for cat in profiles.keys():
+                    cat_input.listItems.add(cat, False)
 
-            if profileResult is None:
-                ui.messageBox('Operation canceled by the user.')
-                return
-            
-            selectedProfile = str(profileResult).strip()
+            # Add a dropdown for selecting a specific profile (initially disabled)
+            if not inputs.itemById('profile'):
+                prof_input = inputs.addDropDownCommandInput('profile', 'Profile', adsk.core.DropDownStyles.TextListDropDownStyle)
+                prof_input.isEnabled = False
 
-            if selectedProfile not in profiles[selectedCategory]:
-                ui.messageBox(f'Invalid profile selected: {selectedProfile}')
-                return
-            
-            # Prompt the user to select an edge of the profile to center the sketch
-            edgeSelection = ui.selectEntity('Select an edge of the profile to center the sketch', 'Edges')
-            if not edgeSelection:
-                ui.messageBox('No edge selected.')
-                return
-            selectedEdge = adsk.fusion.BRepEdge.cast(edgeSelection.entity)
+            # Add a selection input for choosing the planar entity (e.g., face)
+            if not inputs.itemById('plane'):
+                plane_input = inputs.addSelectionInput('plane', 'Select Planar Entity', 'Select a planar face')
+                plane_input.addSelectionFilter('PlanarFaces')
 
-            # The next two lines expect the profile to have been drawn witn a radius of 10mm = 1cm 
-            standardDiameter = 1.0  # This values corresponds to the inner radiues of the profile. A value of 1 = 1cm = 10mm. This should match the inner radius of the sketch profile in centimeters.
-            scaleFactor = calculateScaleFactor(selectedEdge, standardDiameter)
+            # Add a selection input for choosing the edge of the profile
+            if not inputs.itemById('edge'):
+                edge_input = inputs.addSelectionInput('edge', 'Select Edge', 'Select an edge of the profile to center the sketch')
+                edge_input.addSelectionFilter('Edges')
 
-            # Identify the loop (profile) containing the selected edge
-            face = selectedEdge.faces.item(0)  # Assuming the first face is relevant
-            loop = None
-            for l in face.loops:
-                if selectedEdge in l.edges:
-                    loop = l
-                    break
-            
-            if not loop:
-                ui.messageBox('Failed to identify the loop containing the selected edge.')
-                return
+            # Attach input change event handler to dynamically update available profiles
+            if prof_input is not None:
+                inputChangedHandler = ProfileInputChangedHandler(prof_input)
+                if inputChangedHandler not in handlers:
+                    cmd.inputChanged.add(inputChangedHandler)
+                    handlers.append(inputChangedHandler)
 
-            # Calculate the centroid of the selected profile
-            profileCentroid = calculateProfileCentroid(loop)
-            if not profileCentroid:
-                ui.messageBox('Failed to calculate the profile centroid.')
-                return
+            # Attach the execution handler to execute the profile scaling and centering logic
+            executeHandler = ProfileCommandExecuteHandler()
+            if executeHandler not in handlers:
+                cmd.execute.add(executeHandler)
+                handlers.append(executeHandler)
 
-            # Prompt the user to select a planar face or construction plane for the new sketch
-            planarEntity = ui.selectEntity('Select a planar face or construction plane for the new sketch', 'PlanarFaces,ConstructionPlanes')
-            if not planarEntity:
-                ui.messageBox('No planar entity selected.')
-                return
-
-            selectedEntity = adsk.fusion.ConstructionPlane.cast(planarEntity.entity) or adsk.fusion.BRepFace.cast(planarEntity.entity)
-            if not selectedEntity:
-                ui.messageBox('Invalid selection.')
-                return
-
-            # Create a new sketch on the selected plane
-            sketch = root_comp.sketches.add(selectedEntity)
-
-            # Extract X and Y Offsets
-            offsetX = profileCentroid.x
-            offsetY = profileCentroid.y
-
-            # Add entities for the selected profile
-            addScaledSketchEntities(sketch, profiles[selectedCategory][selectedProfile], offsetX, offsetY, scaleFactor)
-            
-            # Notify the user
-            ui.messageBox('The sketch has been has been scaled and centered successfully on the selected profile.')
-            
-        return ui.messageBox('Operation canceled by the user.')
-            
-
-    except Exception as e:
-        if ui:
+        except Exception as e:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            
+    def addInputsToCommand(cmd):
+        inputs = cmd.commandInputs
+        
+        # Other inputs setup like dropdowns and selection inputs
+        # ...
 
+        # Add an OK button
+        okBtn = inputs.addButtonCommandInput('ok_button_id', 'OK', adsk.core.ButtonRowCommandInput.iconNameEnum.kAcceptIcon)
+        okBtn.isPromotion = True  # Optional: Promote the button for easier access
+
+
+
+class ProfileInputChangedHandler(adsk.core.InputChangedEventHandler):
+    def __init__(self, profile_input):
+        """
+        Initializes the handler with a reference to the profile dropdown input.
+
+        Parameters:
+            profile_input (adsk.core.DropDownCommandInput): The dropdown input for selecting profiles.
+        """
+        super().__init__()
+        self.profile_input = profile_input
+
+    def notify(self, args):
+        """
+        Updates the profile dropdown options based on the selected category.
+
+        Parameters:
+            args (adsk.core.InputChangedEventArgs): Arguments containing details about the input change event.
+        """
+        eventArgs = adsk.core.InputChangedEventArgs.cast(args)
+        changed_input = eventArgs.input
+
+        # If the category input changes, update the profiles list
+        if changed_input.id == 'category':
+            self.profile_input.listItems.clear()
+            selected_category = changed_input.selectedItem.name
+
+            # Populate the profiles dropdown with available profiles in the selected category
+            for profile in profiles[selected_category].keys():
+                self.profile_input.listItems.add(profile, False)
+            self.profile_input.isEnabled = True
+            if self.profile_input.listItems.count > 0:
+                # Select the first available profile by default
+                self.profile_input.listItems.item(0).isSelected = True
+
+
+# Add a button to manually terminate the command and cleanup
+def add_termination_button(inputs):
+    btnInput = inputs.addButtonCommandInput('terminateBtn', 'Terminate', 'Terminate and clean up the script')
+    btnInput.isPromoted = True  # Optionally promote the button for easier access
+
+
+class ProfileCommandExecuteHandler(adsk.core.CommandEventHandler):
+    """Handler for the 'CommandExecute' event to scale and center the selected sketch profile."""
+
+    def __init__(self):
+        super().__init__()
+
+    def notify(self, args):
+        """
+        Scales and centers the selected predefined sketch profile onto the selected planar face.
+
+        Parameters:
+            args (adsk.core.CommandEventArgs): Arguments containing details about the command execution event.
+        """
+        try:
+            # ui.messageBox('Execute handler called')  # Troubleshooting
+            
+            # Cast the event args and retrieve command inputs
+            eventArgs = adsk.core.CommandEventArgs.cast(args)
+            inputs = eventArgs.command.commandInputs
+
+            # Retrieve the selected profile category and profile name
+            category_input = inputs.itemById('category')
+            profile_name_input = inputs.itemById('profile')
+            selected_category = category_input.selectedItem.name
+            # ui.messageBox(selected_category)  # Troubleshooting
+            selected_profile = profile_name_input.selectedItem.name
+            # ui.messageBox(selected_profile) # Troubleshooting
+
+            # Retrieve the selected planar entity and edge for centering
+            plane_input = inputs.itemById('plane')
+            selected_entity = plane_input.selection(0).entity
+            edge_input = inputs.itemById('edge')
+            try: 
+                selected_edge = adsk.fusion.BRepEdge.cast(edge_input.selection(0).entity)
+            
+                # This values corresponds to the inner radiues of the profile. A value of 1 = 1cm = 10mm. This should match the inner radius of the sketch profile in centimeters.
+                standardDiameter = 1.0  # Set your standard diameter: # The next two lines expect the profile to have been drawn witn a radius of 10mm = 1cm 
+                # Determine the scale factor using the selected edge's diameter
+
+                scaleFactor = calculateScaleFactor(selected_edge, standardDiameter)
+                
+                # Find the loop containing the selected edge
+                face = selected_edge.faces.item(0)
+                loop = next((l for l in face.loops if selected_edge in l.edges), None)
+                if not loop:
+                    ui.messageBox('Failed to identify the loop containing the selected edge.')
+                    return
+
+                # Calculate the centroid of the selected profile loop
+                profile_centroid = calculateProfileCentroid(loop)
+                if not profile_centroid:
+                    ui.messageBox('Failed to calculate the profile centroid.')
+                    return
+
+                # Create a new sketch on the selected planar entity and add the scaled profile
+                design = app.activeProduct
+                root_comp = design.rootComponent
+                sketch = root_comp.sketches.add(selected_entity)
+
+                # Offset the sketch to the profile's centroid and scale it
+                offsetX, offsetY = profile_centroid.x, profile_centroid.y
+                addScaledSketchEntities(sketch, profiles[selected_category][selected_profile], offsetX, offsetY, scaleFactor)
+
+                # Notify the user of success
+                ui.messageBox('Sketch successfully scaled and centered on the selected profile.')
+            except:
+                    pass
+        except Exception as e:
+            ui.messageBox('Execution Failed:\n{}'.format(traceback.format_exc()))
+
+# Function to create and execute the command for adding the sketch
+def run(context):
+    # Check for an existing command definition and create if it doesn't exist
+    cmdDef = ui.commandDefinitions.itemById('createProfile')
+    if not cmdDef:
+        cmdDef = ui.commandDefinitions.addButtonDefinition('createProfile', 'Create Sketch Profile', 'Creates a scaled sketch profile on selected face')
+
+    # Connect to the command created event
+    onCommandCreated = ProfileCommandCreatedHandler()
+    cmdDef.commandCreated.add(onCommandCreated)
+    handlers.append(onCommandCreated)
+
+    # Execute the command
+    cmdDef.execute()
+
+    # Keep the script running to listen for events
+    adsk.autoTerminate(False)
+
+# Initialize the application and user interface
 app = adsk.core.Application.get()
+ui = app.userInterface
+
 run(adsk.fusion.Design.cast(app.activeProduct))
+
