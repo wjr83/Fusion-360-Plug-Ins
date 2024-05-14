@@ -1,7 +1,8 @@
 '''
 Author: William J. Reid
 Description: Recreates a hard-coded sketch profile, scales it to match the user-selected extruded-cut circle diameter, and centers 
-the sketch onto the extruded-cut circular profile selecteed. The hard-coded skech profile is extracted from the output of ExtractSketchProfilev3.py script. 
+the sketch onto the extruded-cut circular profile selecteed. Preliminary ability for user to create a tight fit (interference), normal fit (transition), or clearance fit (loose).
+The hard-coded skech profile is extracted from the output of ExtractSketchProfilev3.py script. 
 '''
 
 import adsk.core, adsk.fusion, adsk.cam, traceback, math
@@ -492,6 +493,8 @@ class ProfileCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
             cmd = adsk.core.Command.cast(args.command)
             inputs = cmd.commandInputs
 
+           
+            
             # Initialize profile input to None initially
             prof_input = None
             
@@ -516,6 +519,13 @@ class ProfileCommandCreatedHandler(adsk.core.CommandCreatedEventHandler):
                 edge_input = inputs.addSelectionInput('edge', 'Select Edge', 'Select an edge of the profile to center the sketch')
                 edge_input.addSelectionFilter('Edges')
 
+            if not inputs.itemById('fitType'):
+                # Creating radio button group for fit settings
+                fitGroup = inputs.addRadioButtonGroupCommandInput('fitType', 'Fit Type')
+                fitGroup.listItems.add('Tight', True)
+                fitGroup.listItems.add('Normal', False)
+                fitGroup.listItems.add('Loose', False)
+                
             # Attach input change event handler to dynamically update available profiles
             if prof_input is not None:
                 inputChangedHandler = ProfileInputChangedHandler(prof_input)
@@ -621,9 +631,15 @@ class ProfileCommandExecuteHandler(adsk.core.CommandEventHandler):
                 selected_edge = adsk.fusion.BRepEdge.cast(edge_input.selection(0).entity)
             
                 # This values corresponds to the inner radiues of the profile. A value of 1 = 1cm = 10mm. This should match the inner radius of the sketch profile in centimeters.
-                standardDiameter = 1.0  # Set your standard diameter: # The next two lines expect the profile to have been drawn witn a radius of 10mm = 1cm 
+                standardDiameter = 1.0  # default scale factor for 'Normal' # Set your standard diameter: # The next two lines expect the profile to have been drawn witn a radius of 10mm = 1cm 
                 # Determine the scale factor using the selected edge's diameter
-
+                # Determine the scale factor modification based on the radio button selection
+                fitTypeInput = inputs.itemById('fitType').selectedItem.name
+                if fitTypeInput == 'Tight':
+                    standardDiameter *= 1.02  # decrease scale by 0.99%
+                elif fitTypeInput == 'Loose':
+                    standardDiameter *= 0.98  # increase scale by 5%
+                    
                 scaleFactor = calculateScaleFactor(selected_edge, standardDiameter)
                 
                 # Find the loop containing the selected edge
@@ -678,4 +694,3 @@ app = adsk.core.Application.get()
 ui = app.userInterface
 
 run(adsk.fusion.Design.cast(app.activeProduct))
-
